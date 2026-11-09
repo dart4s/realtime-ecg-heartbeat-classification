@@ -1,10 +1,16 @@
 let ecgChart = null;
 let distChart = null;
 let trendChart = null;
+let cachedRecords = [];
+let lastAlertTimestamp = "";
+let lastQueryResult = null;
+let audioCtx = null;
+let soundEnabled = false;
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
+  initSoundAlert();
   initCharts();
   fetchTelemetry();
 
@@ -12,6 +18,12 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(fetchTelemetry, 3000);
 
   document.getElementById("hospitalFilter").addEventListener("change", fetchTelemetry);
+
+  // Search filter for telemetry table
+  const searchInput = document.getElementById("telemetrySearch");
+  if (searchInput) {
+    searchInput.addEventListener("input", renderRecordsTable);
+  }
 
   // Bind simulate button
   const btnSimulate = document.getElementById("btnSimulate");
@@ -23,6 +35,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const sqlPresets = document.getElementById("sqlPresets");
   const sqlInput = document.getElementById("sqlInput");
   const btnRunQuery = document.getElementById("btnRunQuery");
+  const btnExportCsv = document.getElementById("btnExportQueryCsv");
 
   if (sqlPresets && sqlInput) {
     sqlPresets.addEventListener("change", () => {
@@ -30,10 +43,24 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  if (sqlInput) {
+    // Ctrl+Enter or Cmd+Enter to execute query
+    sqlInput.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        runSqlQuery();
+      }
+    });
+  }
+
   if (btnRunQuery) {
     btnRunQuery.addEventListener("click", runSqlQuery);
     // Run default query once on page load
     runSqlQuery();
+  }
+
+  if (btnExportCsv) {
+    btnExportCsv.addEventListener("click", exportQueryToCsv);
   }
 });
 
@@ -69,6 +96,69 @@ function applyTheme(theme) {
       themeText.innerText = "Dark Mode";
     }
   }
+}
+
+// ============================================================================
+// Sound Alert System (Web Audio API Synthesizer)
+// ============================================================================
+function initSoundAlert() {
+  soundEnabled = localStorage.getItem("ecg_sound_enabled") === "true";
+  updateSoundButtonUI();
+
+  const soundToggle = document.getElementById("soundToggle");
+  if (soundToggle) {
+    soundToggle.addEventListener("click", () => {
+      soundEnabled = !soundEnabled;
+      localStorage.setItem("ecg_sound_enabled", soundEnabled ? "true" : "false");
+      updateSoundButtonUI();
+      if (soundEnabled) {
+        playBeep(880, 0.1, 0.05); // Short audio feedback
+      }
+    });
+  }
+}
+
+function updateSoundButtonUI() {
+  const icon = document.getElementById("soundIcon");
+  const text = document.getElementById("soundText");
+  if (!icon || !text) return;
+  if (soundEnabled) {
+    icon.innerText = "🔔";
+    text.innerText = "Sound: On";
+  } else {
+    icon.innerText = "🔇";
+    text.innerText = "Sound: Off";
+  }
+}
+
+function playBeep(freq, duration, volume = 0.08) {
+  try {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  } catch (e) {
+    console.warn("Audio not supported or blocked:", e);
+  }
+}
+
+function playArrhythmiaAlarm() {
+  if (!soundEnabled) return;
+  // Subtle medical two-tone chime (880Hz -> 660Hz)
+  playBeep(880, 0.12, 0.08);
+  setTimeout(() => playBeep(660, 0.18, 0.08), 130);
 }
 
 function updateChartsTheme(theme) {
@@ -228,11 +318,20 @@ async function fetchTelemetry() {
       trendChart.update();
     }
 
-    // 5. Update Health Alerts
+    // 5. Update Health Alerts & Trigger Audio Alarm
     const alertsList = document.getElementById("alertsList");
-    if (data.alerts.length === 0) {
+    if (!data.alerts || data.alerts.length === 0) {
       alertsList.innerHTML = `<div class="empty-state">✅ No abnormal heartbeats detected in the recent stream.</div>`;
     } else {
+      const topAlert = data.alerts[0];
+      const alertId = `${topAlert.time}_${topAlert.patient_name}_${topAlert.result}`;
+      if (alertId !== lastAlertTimestamp) {
+        lastAlertTimestamp = alertId;
+        if (topAlert.result === "V" || topAlert.result === "F") {
+          playArrhythmiaAlarm();
+        }
+      }
+
       alertsList.innerHTML = data.alerts.map(a => {
         let cls = "info";
         if (a.result === "V") cls = "critical";
@@ -254,24 +353,48 @@ async function fetchTelemetry() {
       }).join("");
     }
 
-    // 6. Update Table
-    const tableBody = document.getElementById("recordsBody");
-    if (data.records.length === 0) {
-      tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">No records available</td></tr>`;
-    } else {
-      tableBody.innerHTML = data.records.map(r => `
-        <tr>
-          <td>${r.Time || "-"}</td>
-          <td>${r["Patient ID"] || "-"}</td>
-          <td><strong>${r["Patient Name"] || "-"}</strong></td>
-          <td>${r.Age || "-"} / ${r.Gender || "-"}</td>
-          <td>${r["Hospital Name"] || "-"}</td>
-          <td><span class="badge ${r.Result}">${r.Result}</span></td>
-        </tr>
-      `).join("");
-    }
+    // 6. Update Table Cache & Render
+    cachedRecords = data.records || [];
+    renderRecordsTable();
   } catch (err) {
     console.error("Failed to fetch telemetry:", err);
+  }
+}
+
+// ============================================================================
+// Render Table with Real-time Search Filtering
+// ============================================================================
+function renderRecordsTable() {
+  const tableBody = document.getElementById("recordsBody");
+  if (!tableBody) return;
+
+  const searchInput = document.getElementById("telemetrySearch");
+  const query = searchInput ? searchInput.value.trim().toLowerCase() : "";
+
+  let filtered = cachedRecords;
+  if (query) {
+    filtered = cachedRecords.filter(r => {
+      const name = String(r["Patient Name"] || "").toLowerCase();
+      const id = String(r["Patient ID"] || "").toLowerCase();
+      const hosp = String(r["Hospital Name"] || "").toLowerCase();
+      const res = String(r["Result"] || "").toLowerCase();
+      return name.includes(query) || id.includes(query) || hosp.includes(query) || res.includes(query);
+    });
+  }
+
+  if (filtered.length === 0) {
+    tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted);">${query ? "No matching records found for '" + query + "'" : "No records available"}</td></tr>`;
+  } else {
+    tableBody.innerHTML = filtered.map(r => `
+      <tr>
+        <td>${r.Time || "-"}</td>
+        <td>${r["Patient ID"] || "-"}</td>
+        <td><strong>${r["Patient Name"] || "-"}</strong></td>
+        <td>${r.Age || "-"} / ${r.Gender || "-"}</td>
+        <td>${r["Hospital Name"] || "-"}</td>
+        <td><span class="badge ${r.Result}">${r.Result}</span></td>
+      </tr>
+    `).join("");
   }
 }
 
@@ -300,7 +423,7 @@ async function triggerHeartbeatSimulation() {
 }
 
 // ============================================================================
-// SQL Console Live Query Execution
+// SQL Console Live Query Execution & CSV Export
 // ============================================================================
 async function runSqlQuery() {
   const sqlInput = document.getElementById("sqlInput");
@@ -309,6 +432,7 @@ async function runSqlQuery() {
   const thead = document.getElementById("queryResultHead");
   const tbody = document.getElementById("queryResultBody");
   const btnRun = document.getElementById("btnRunQuery");
+  const btnExportCsv = document.getElementById("btnExportQueryCsv");
 
   if (!sqlInput || !statusDiv || !table) return;
 
@@ -335,7 +459,12 @@ async function runSqlQuery() {
     const duration = (performance.now() - startTime).toFixed(1);
 
     if (result.status === "success") {
+      lastQueryResult = { columns: result.columns, rows: result.rows };
       statusDiv.innerHTML = `<span class="query-success-msg">✅ Query executed in ${duration} ms — ${result.count} row(s) returned.</span>`;
+
+      if (btnExportCsv) {
+        btnExportCsv.style.display = result.count > 0 ? "inline-flex" : "none";
+      }
 
       // Build Table Header
       if (result.columns.length > 0) {
@@ -360,14 +489,46 @@ async function runSqlQuery() {
       }
       table.style.display = "table";
     } else {
+      lastQueryResult = null;
+      if (btnExportCsv) btnExportCsv.style.display = "none";
       statusDiv.innerHTML = `<span class="query-error-msg">❌ SQL Error: ${result.message}</span>`;
       table.style.display = "none";
     }
   } catch (err) {
+    lastQueryResult = null;
+    if (btnExportCsv) btnExportCsv.style.display = "none";
     statusDiv.innerHTML = `<span class="query-error-msg">❌ Network Error: Failed to execute query.</span>`;
     table.style.display = "none";
   } finally {
     btnRun.disabled = false;
     btnRun.innerText = "▶️ Execute SQL Query";
   }
+}
+
+function exportQueryToCsv() {
+  if (!lastQueryResult || !lastQueryResult.columns || lastQueryResult.rows.length === 0) {
+    alert("No query results to export.");
+    return;
+  }
+  const cols = lastQueryResult.columns;
+  const rows = lastQueryResult.rows;
+
+  const csvRows = [];
+  csvRows.push(cols.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","));
+  rows.forEach(r => {
+    csvRows.push(r.map(cell => {
+      const val = cell === null ? "" : String(cell);
+      return `"${val.replace(/"/g, '""')}"`;
+    }).join(","));
+  });
+
+  const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `query_result_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
