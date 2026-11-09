@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Real-time ECG Heartbeat Classification</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <!-- Chart.js for smooth canvas visualizations -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="header-container">
+    <div class="header-left">
+      <h1>🫀 Real-time ECG Heartbeat Telemetry</h1>
+      <p class="subtitle">Distributed End-to-End Pipeline & Arrhythmia Classification System</p>
+    </div>
+    <div class="header-controls">
+      <button id="soundToggle" class="theme-toggle-btn" title="Toggle audio alert chime for dangerous arrhythmias">
+        <span id="soundIcon">🔇</span> <span id="soundText">Sound: Off</span>
+      </button>
+      <button id="themeToggle" class="theme-toggle-btn" title="Toggle Light / Dark Mode">
+        <span id="themeIcon">🌙</span> <span id="themeText">Dark Mode</span>
+      </button>
+      <div>
+        <span class="status-badge live">● System Live</span>
+        <div id="lastUpdate" class="last-update">Connecting...</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- KPI Cards -->
+  <section class="kpi-grid">
+    <div class="kpi-card total">
+      <div class="kpi-title">Total Patients</div>
+      <div id="kpiTotal" class="kpi-value">0</div>
+      <div id="kpiStream" class="kpi-sub" style="color: var(--accent-blue);">+0 streamed</div>
+    </div>
+    <div class="kpi-card normal">
+      <div class="kpi-title">[N] Normal</div>
+      <div id="kpiN" class="kpi-value">0</div>
+      <div class="kpi-sub" style="color: var(--normal-green);">Class 0</div>
+    </div>
+    <div class="kpi-card supra">
+      <div class="kpi-title">[S] Supraventricular</div>
+      <div id="kpiS" class="kpi-value">0</div>
+      <div class="kpi-sub" style="color: var(--warning-orange);">Class 1</div>
+    </div>
+    <div class="kpi-card vent">
+      <div class="kpi-title">[V] Ventricular</div>
+      <div id="kpiV" class="kpi-value">0</div>
+      <div class="kpi-sub" style="color: var(--danger-red);">Class 2</div>
+    </div>
+    <div class="kpi-card fusion">
+      <div class="kpi-title">[F] Fusion</div>
+      <div id="kpiF" class="kpi-value">0</div>
+      <div class="kpi-sub" style="color: var(--fusion-purple);">Class 3</div>
+    </div>
+    <div class="kpi-card paced">
+      <div class="kpi-title">[Q] Paced/Unknown</div>
+      <div id="kpiQ" class="kpi-value">0</div>
+      <div class="kpi-sub" style="color: var(--paced-cyan);">Class 4</div>
+    </div>
+  </section>
+
+  <!-- Main Grid: Charts & Alerts -->
+  <section class="dashboard-grid">
+    <!-- Left Column: Waveform & Trend -->
+    <div style="display: flex; flex-direction: column; gap: 24px;">
+      <!-- Waveform Card -->
+      <div class="card">
+        <div class="card-header">
+          <h2 id="waveformTitle">Latest ECG Heartbeat Waveform</h2>
+          <span style="font-size: 12px; color: var(--text-muted);">187 Normalized Samples</span>
+        </div>
+        <div style="height: 240px; position: relative;">
+          <canvas id="ecgChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Trend Card -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Cumulative Trend Over Time</h2>
+          <span style="font-size: 12px; color: var(--text-muted);">Real-time Progression</span>
+        </div>
+        <div style="height: 200px; position: relative;">
+          <canvas id="trendChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Alerts & Distribution -->
+    <div style="display: flex; flex-direction: column; gap: 24px;">
+      <!-- Health Alerts Card -->
+      <div class="card">
+        <div class="card-header">
+          <h2>🚨 Health Alerts</h2>
+          <span style="font-size: 12px; color: var(--danger-red);">Abnormal Beats</span>
+        </div>
+        <div id="alertsList" class="alerts-list">
+          <div class="empty-state">Loading alerts...</div>
+        </div>
+      </div>
+
+      <!-- Class Distribution Card -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Classification Ratio</h2>
+        </div>
+        <div style="height: 220px; position: relative;">
+          <canvas id="distChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Filter & Action Bar -->
+  <section class="filter-bar">
+    <div class="filter-left">
+      <label for="hospitalFilter" style="font-size: 14px; font-weight: 500;">Filter by Hospital:</label>
+      <select id="hospitalFilter" class="select-input">
+        {% for hosp in hospitals %}
+          <option value="{{ hosp }}">{{ hosp }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="action-buttons">
+      <button id="btnSimulate" class="btn-accent" title="Trigger a single ECG heartbeat transmission and classification">
+        ⚡ Send Sample Heartbeat
+      </button>
+      <a href="/api/export-csv" class="btn-primary" title="Export full records to CSV">
+        ⬇️ Export CSV
+      </a>
+    </div>
+  </section>
+
+  <!-- Data Table -->
+  <section class="card">
+    <div class="card-header" style="flex-wrap: wrap; gap: 10px;">
+      <div>
+        <h2>Recent Ingested Patient Telemetry Records</h2>
+        <span style="font-size: 12px; color: var(--text-muted);">Auto-updating live table</span>
+      </div>
+      <div>
+        <input type="text" id="telemetrySearch" placeholder="🔍 Search patient, ID, or hospital..." class="select-input" style="padding: 6px 12px; font-size: 13px; width: 280px; max-width: 100%;">
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Patient ID</th>
+            <th>Patient Name</th>
+            <th>Age / Gender</th>
+            <th>Hospital</th>
+            <th>Classification</th>
+          </tr>
+        </thead>
+        <tbody id="recordsBody">
+          <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Loading telemetry records...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- SQL Live Query Console -->
+  <section class="card" style="margin-top: 24px;">
+    <div class="card-header">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <h2>🔍 SQLite Live Query Console</h2>
+        <span style="font-size: 12px; background: rgba(9, 105, 218, 0.15); color: var(--accent-blue); padding: 2px 8px; border-radius: 12px; font-weight: 600;">ecg_pipeline.db</span>
+      </div>
+      <div>
+        <label for="sqlPresets" style="font-size: 13px; color: var(--text-muted); margin-right: 6px;">Query Templates:</label>
+        <select id="sqlPresets" class="select-input" style="padding: 4px 10px; font-size: 13px;">
+          <option value="SELECT id, timestamp, patient_id, patient_name, age, gender, hospital_name, result FROM telemetry_records ORDER BY id DESC LIMIT 10;">1. Latest 10 Telemetry Records</option>
+          <option value="SELECT timestamp, patient_name, hospital_name, result FROM telemetry_records WHERE result IN ('S', 'V', 'F', 'Q') ORDER BY id DESC LIMIT 10;">2. Abnormal Heartbeat Alerts</option>
+          <option value="SELECT result, COUNT(*) as total_cases, ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM telemetry_records), 1) as percentage FROM telemetry_records GROUP BY result ORDER BY total_cases DESC;">3. Cases Summary by Arrhythmia Class</option>
+          <option value="SELECT hospital_name, COUNT(*) as total_patients, SUM(is_alert) as alert_cases FROM telemetry_records GROUP BY hospital_name ORDER BY total_patients DESC;">4. Hospital Activity & Alert Distribution</option>
+          <option value="SELECT * FROM system_logs ORDER BY id DESC LIMIT 15;">5. Recent System Service Logs</option>
+          <option value="SELECT gender, AVG(age) as avg_age, COUNT(*) as count FROM telemetry_records GROUP BY gender;">6. Patient Demographics Summary</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- SQL Editor Box -->
+    <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+      <textarea id="sqlInput" class="sql-editor" rows="4" spellcheck="false">SELECT id, timestamp, patient_id, patient_name, age, gender, hospital_name, result FROM telemetry_records ORDER BY id DESC LIMIT 10;</textarea>
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+        <span style="font-size: 12px; color: var(--text-muted);">ℹ️ Safe read-only mode enabled. Supports SELECT, PRAGMA, EXPLAIN queries. (Ctrl+Enter to run)</span>
+        <div style="display: flex; gap: 8px;">
+          <button id="btnExportQueryCsv" class="btn-primary" style="display: none; background: #2da44e;" title="Download query results as CSV">
+            📥 Export Result CSV
+          </button>
+          <button id="btnRunQuery" class="btn-primary">
+            ▶️ Execute SQL Query
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Query Results -->
+    <div id="queryResultStatus" style="font-size: 13px; margin-bottom: 12px; display: none;"></div>
+    <div class="table-responsive" style="max-height: 380px;">
+      <table id="queryResultTable" style="display: none;">
+        <thead id="queryResultHead"></thead>
+        <tbody id="queryResultBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <script src="/static/js/main.js"></script>
+</body>
+</html>

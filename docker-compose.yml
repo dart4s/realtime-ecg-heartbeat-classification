@@ -1,0 +1,75 @@
+version: "3.8"
+
+# Real-time ECG Heartbeat Classification Pipeline
+#
+# Services:
+#   • kafka     — Local Kafka broker (KRaft mode, no Zookeeper needed)
+#   • producer  — Streams ECG heartbeats + Faker patient metadata to Kafka
+#   • consumer  — Consumes from Kafka, runs 1D-CNN inference, saves to CSV
+#   • dashboard — Streamlit web app for monitoring, alerts, and visualization
+
+services:
+  kafka:
+    image: bashj79/kafka-kraft:latest
+    container_name: ecg-kafka-local
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    restart: unless-stopped
+
+  producer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "stream/producer.py"]
+    volumes:
+      - ./source_code/data:/app/source_code/data
+    environment:
+      - USE_LOCAL_KAFKA=true
+      - KAFKA_TOPIC=ECG_TOPIC
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_SECURITY_PROTOCOL=PLAINTEXT
+      - SEND_INTERVAL_SECONDS=3
+    depends_on:
+      - kafka
+    restart: unless-stopped
+
+  consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "stream/consumer.py"]
+    volumes:
+      - ./source_code/data:/app/source_code/data
+      - ./source_code/model:/app/source_code/model:ro
+    environment:
+      - USE_LOCAL_KAFKA=true
+      - KAFKA_TOPIC=ECG_TOPIC
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_SECURITY_PROTOCOL=PLAINTEXT
+    depends_on:
+      - kafka
+      - producer
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "app.py"]
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./source_code/data:/app/source_code/data:ro
+      - ./source_code/material:/app/source_code/material:ro
+    environment:
+      - PORT=8501
+    depends_on:
+      - consumer
+    restart: unless-stopped

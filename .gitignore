@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large dataset files (exclude files >100MB rejected by GitHub)
+source_code/data/mitbih_test.csv
+
+# Runtime databases & generated telemetry files
+source_code/data/received_data.csv
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Model checkpoints (allow lightweight production model)
+source_code/model/*.h5
+!source_code/model/ecg_conv_model.keras
+!source_code/model/.gitkeep
+
+# Kafka SSL keys (NEVER commit)
+source_code/stream/key/
+*.pem
+*.cert
+*.key
+
+# Logs
+*.log
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
