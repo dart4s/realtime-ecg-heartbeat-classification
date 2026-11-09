@@ -6,6 +6,64 @@ An end-to-end distributed data engineering and deep learning system designed to 
 
 ## 🏗️ System Architecture & Workflow
 
+```mermaid
+flowchart TD
+    subgraph Ingestion["1. Data Ingestion & Patient Demographics"]
+        D1["MIT-BIH Arrhythmia Dataset (109,446 records)"]
+        D2["Faker Demographics (Name, Age, Gender, ID)"]
+        D3["Multi-Hospital Directory (hospital.csv)"]
+        PROD["Telemetry Producer (stream/producer.py)"]
+        D1 --> PROD
+        D2 --> PROD
+        D3 --> PROD
+    end
+
+    subgraph Broker["2. Message Broker & Streaming Engine"]
+        K_LOCAL["Local Apache Kafka (Docker KRaft :9092)"]
+        K_CLOUD["Aiven Cloud Kafka (SSL Mutual TLS)"]
+        K_DIRECT["Direct Stream Engine (Zero-Broker Fallback)"]
+        PROD -->|"Topic: ECG_TOPIC"| K_LOCAL
+        PROD -.->|"SSL Certs"| K_CLOUD
+        PROD -.->|"Offline Fallback"| K_DIRECT
+    end
+
+    subgraph Inference["3. Stream Processing & Deep Learning Inference"]
+        CONS["Stream Consumer (stream/consumer.py)"]
+        MODEL["1D-CNN Model (ecg_conv_model.keras - 98.2% Acc)"]
+        ALERT["Arrhythmia Classifier & Severity Engine (N, S, V, F, Q)"]
+        K_LOCAL --> CONS
+        K_CLOUD --> CONS
+        CONS --> MODEL
+        MODEL --> ALERT
+        K_DIRECT --> ALERT
+    end
+
+    subgraph Storage["4. Persistent Data Layer (SQLite WAL)"]
+        DB[("SQLite Database: data/ecg_pipeline.db")]
+        T_REC["telemetry_records (Signals, Predictions, Demographics)"]
+        T_LOG["system_logs (Audit Trail, Alerts, Service Events)"]
+        F_CSV["CSV Telemetry Backup: data/received_data.csv"]
+        ALERT -->|"ACID Transaction"| DB
+        ALERT --> F_CSV
+        DB --> T_REC
+        DB --> T_LOG
+    end
+
+    subgraph Presentation["5. Web Application & Analytics Dashboard"]
+        FLASK["Flask Application Server (app.py - Port 5000/8080)"]
+        WEB["Responsive Web Dashboard (HTML5 / CSS3 / Chart.js)"]
+        SQL_UI["SQLite Live Query Console (In-Browser SQL Editor)"]
+        SOUND["Audio Arrhythmia Alarm (Web Audio API Synthesizer)"]
+        TEST_BTN["1-Click Heartbeat Simulator (⚡ Test Button)"]
+        
+        DB --> FLASK
+        FLASK --> WEB
+        FLASK --> SQL_UI
+        WEB --> SOUND
+        TEST_BTN --> FLASK
+    end
+```
+
 The platform simulates a multi-source global telemetry setup and processes streaming medical data through a robust pipeline:
 
 1. **Global Data Ingestion & Streaming (`Apache Kafka` & `Aiven Cloud`):**
@@ -18,7 +76,52 @@ The platform simulates a multi-source global telemetry setup and processes strea
    - Trained and evaluated 5 neural network architectures (**1D-CNN, GRU, LSTM, RNN, MLP**) across distributed hardware (`2x GPUs` and `8x TPUs`).
    - Selected the top-performing **1D-CNN model** to execute real-time classification.
 4. **Interactive Monitoring Dashboard (`Flask`, `HTML5/CSS3`, `Chart.js` & `Streamlit`):**
-   - Deployed a responsive web dashboard featuring live ECG waveform visualization, real-time health alerts, Dark/Light theme switching, and an embedded **SQLite Live Query Console** for in-browser data analytics.
+   - Deployed a responsive web dashboard featuring live ECG waveform visualization, real-time health alerts, Dark/Light theme switching, audio arrhythmia chime, and an embedded **SQLite Live Query Console** for in-browser data analytics.
+
+### 🔄 End-to-End Real-Time Data Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Doctor as Doctor / Monitor
+    participant UI as Web Dashboard (Browser)
+    participant Flask as Flask Server (app.py)
+    participant Consumer as Consumer & 1D-CNN (consumer.py)
+    participant Broker as Kafka Broker (:9092)
+    participant Producer as Telemetry Producer (producer.py)
+    participant DB as SQLite (ecg_pipeline.db)
+
+    Note over Producer,Broker: 1. Telemetry Ingestion Phase
+    Producer->>Producer: Sample 187 ECG points + Gen Faker Demographics
+    alt Kafka Broker Online
+        Producer->>Broker: Publish JSON (Patient Info + 187 Signals)
+        Broker->>Consumer: Poll message stream
+        Consumer->>Consumer: 1D-CNN Model Inference (Predict N, S, V, F, Q)
+        Consumer->>DB: INSERT into telemetry_records (WAL Mode)
+    else Direct Mode Fallback
+        Producer->>Consumer: Direct In-Memory Inference
+        Consumer->>DB: INSERT into telemetry_records
+    end
+
+    Note over UI,Flask: 2. Real-Time Monitoring Phase
+    UI->>Flask: GET /api/telemetry (Polled every 3s)
+    Flask->>DB: Query latest 50 records & aggregate KPIs
+    DB-->>Flask: Return records, alerts, and trend distribution
+    Flask-->>UI: JSON Payload (Waveform points, KPIs, Alerts)
+    UI->>UI: Update Chart.js Waveform & Doughnut Distribution
+    opt Critical Arrhythmia (V or F)
+        UI->>Doctor: Play Two-Tone Audio Alarm & Flash Alert Tag
+    end
+
+    Note over UI,DB: 3. Interactive SQL Analysis Phase
+    Doctor->>UI: Write Custom SQL Query (or Select Template)
+    UI->>Flask: POST /api/query { query }
+    Flask->>Flask: Read-Only Security Inspection
+    Flask->>DB: Execute SELECT Query
+    DB-->>Flask: Query Result (Columns + Rows)
+    Flask-->>UI: JSON (Data + Execution Duration)
+    UI-->>Doctor: Render Dynamic Results Grid & Enable CSV Download
+```
 
 ---
 
